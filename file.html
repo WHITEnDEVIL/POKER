@@ -1,0 +1,150 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Poker Table</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #12161c; color: #eee; font-family: system-ui, sans-serif; }
+  #join { max-width: 320px; margin: 15vh auto; text-align: center; }
+  input, button { font-size: 16px; padding: 10px 14px; border-radius: 8px; border: 0; }
+  button { background: #2e8b57; color: #fff; cursor: pointer; }
+  button:disabled { background: #444; cursor: default; }
+  button.fold { background: #b03a3a; }
+  #wrap { max-width: 900px; margin: 0 auto; padding: 10px; }
+  #table { position: relative; width: 100%; aspect-ratio: 16/10; }
+  #felt { position: absolute; inset: 8% 6%; border-radius: 50%; border: 10px solid #5b3a1e;
+          background: radial-gradient(#1f7a4a, #0f4d2d); box-shadow: 0 0 30px #000 inset; }
+  #center { position: absolute; left: 50%; top: 45%; transform: translate(-50%,-50%); text-align: center; }
+  #pot { font-weight: bold; color: #ffd75e; margin-bottom: 6px; }
+  #board { display: flex; gap: 6px; justify-content: center; min-height: 64px; }
+  #msg { margin-top: 8px; font-size: 14px; color: #cde; min-height: 20px; }
+  .seat { position: absolute; transform: translate(-50%,-50%); text-align: center; width: 130px;
+          background: #1b2230; border: 2px solid #333; border-radius: 12px; padding: 6px; font-size: 13px; }
+  .seat.turn { border-color: #ffd75e; box-shadow: 0 0 12px #ffd75e; }
+  .seat.won { border-color: #4dff88; box-shadow: 0 0 14px #4dff88; }
+  .seat.out { opacity: .4; }
+  .name { font-weight: bold; }
+  .chips { color: #ffd75e; }
+  .bet { color: #9fd; font-size: 12px; min-height: 16px; }
+  .hand { display: flex; gap: 3px; justify-content: center; min-height: 52px; margin-top: 3px; }
+  .dealer { background: #fff; color: #000; border-radius: 50%; padding: 0 5px; font-size: 11px; margin-left: 4px; }
+  .card { width: 38px; height: 54px; background: #fff; color: #111; border-radius: 5px; font-weight: bold;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 16px; line-height: 1; }
+  .card small { font-size: 16px; }
+  .card.red { color: #c62828; }
+  .card.back { background: repeating-linear-gradient(45deg,#2a4b9b,#2a4b9b 4px,#1d3570 4px,#1d3570 8px); border: 2px solid #fff; }
+  #board .card { width: 46px; height: 64px; font-size: 19px; }
+  #controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; align-items: center;
+              margin: 10px 0; min-height: 48px; }
+  #controls input[type=number] { width: 90px; }
+  #log { background: #1b2230; border-radius: 10px; padding: 10px; height: 130px; overflow-y: auto; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="join">
+  <h2>♠ Poker Table ♥</h2>
+  <p>Enter your name to take a seat</p>
+  <input id="name" maxlength="14" placeholder="Your name"> <button id="joinBtn">Join</button>
+  <p id="err" style="color:#f77"></p>
+</div>
+
+<div id="wrap" hidden>
+  <div id="table">
+    <div id="felt"></div>
+    <div id="center"><div id="pot"></div><div id="board"></div><div id="msg"></div></div>
+    <div id="seats"></div>
+  </div>
+  <div id="controls"></div>
+  <div id="log"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const token = localStorage.pokerToken || (localStorage.pokerToken = Math.random().toString(36).slice(2) + Date.now());
+const POS = [[50,90],[9,62],[22,12],[78,12],[91,62]]; // seat spots, "you" at the bottom
+const SU = ['♠','♥','♦','♣'];
+const R = r => ({11:'J',12:'Q',13:'K',14:'A'}[r] || r);
+const card = c => c === 'back' ? '<div class="card back"></div>'
+  : `<div class="card ${c.s===1||c.s===2?'red':''}">${R(c.r)}<small>${SU[c.s]}</small></div>`;
+
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+const send = o => ws.send(JSON.stringify(o));
+const join = () => { const n = $('name').value.trim(); if (n) { localStorage.pokerName = n; send({ t: 'join', name: n, token }); } };
+
+$('name').value = localStorage.pokerName || '';
+$('joinBtn').onclick = join;
+$('name').onkeydown = e => e.key === 'Enter' && join();
+ws.onopen = () => { if (localStorage.pokerName) join(); }; // auto-reconnect
+ws.onmessage = e => {
+  const s = JSON.parse(e.data);
+  if (s.t === 'error') { $('err').textContent = s.msg; return; }
+  $('join').hidden = true; $('wrap').hidden = false;
+  render(s);
+};
+
+function render(s) {
+  const n = s.players.length;
+  $('pot').textContent = s.phase === 'lobby' ? 'Waiting for players…' : `Pot: ${s.pot}`;
+  $('board').innerHTML = s.community.map(card).join('');
+  $('msg').textContent = s.log[s.log.length - 1] || '';
+
+  $('seats').innerHTML = s.players.map((p, i) => {
+    const rel = (i - s.you + n) % n;
+    const [x, y] = POS[Math.floor(rel * 5 / n + 0.5) % 5];
+    const cls = ['seat', s.turn === i ? 'turn' : '', p.won && s.phase === 'showdown' ? 'won' : '',
+                 (!p.inHand && s.phase !== 'lobby') || p.folded ? 'out' : ''].join(' ');
+    const status = !p.connected ? 'Offline' : p.folded ? 'Folded' : p.allIn ? 'ALL-IN' : (p.handName || '');
+    return `<div class="${cls}" style="left:${x}%;top:${y}%">
+      <div class="name">${esc(p.name)}${i === s.you ? ' (you)' : ''}${s.dealer === i && s.phase !== 'lobby' ? '<span class="dealer">D</span>' : ''}</div>
+      <div class="chips">💰 ${p.chips}</div>
+      <div class="bet">${p.bet ? 'Bet: ' + p.bet : status}</div>
+      <div class="hand">${p.cards ? (p.cards === 'back' ? card('back') + card('back') : p.cards.map(card).join('')) : ''}</div>
+      ${p.bet && status ? `<div class="bet">${status}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  $('log').innerHTML = s.log.map(l => `<div>${esc(l)}</div>`).join('');
+  $('log').scrollTop = 1e6;
+  controls(s);
+}
+
+function controls(s) {
+  const el = $('controls'), me = s.players[s.you];
+  if (s.phase === 'lobby' || s.phase === 'gameover') {
+    el.innerHTML = s.isHost
+      ? `<button id="start" ${s.players.length < 2 ? 'disabled' : ''}>${s.phase === 'gameover' ? 'Play again' : 'Start game'} (${s.players.length}/5 seated)</button>`
+      : 'Waiting for the host to start the game…';
+    if ($('start')) $('start').onclick = () => send({ t: 'start' });
+    return;
+  }
+  const mine = s.turn === s.you && ['preflop','flop','turn','river'].includes(s.phase);
+  if (!mine) {
+    el.textContent = s.phase === 'showdown' ? 'Next hand starting soon…'
+      : (s.players[s.turn] ? `Waiting for ${s.players[s.turn].name}…` : '');
+    return;
+  }
+  const toCall = s.currentBet - me.bet, max = me.bet + me.chips;
+  const min = Math.min(s.currentBet + s.minRaise, max);
+  let h = `<button class="fold" id="fold">Fold</button>
+           <button id="call">${toCall ? 'Call ' + Math.min(toCall, me.chips) : 'Check'}</button>`;
+  if (max > s.currentBet)
+    h += `<input type="range" id="rs" min="${min}" max="${max}" value="${min}">
+          <input type="number" id="rn" min="${min}" max="${max}" value="${min}">
+          <button id="raise">${s.currentBet ? 'Raise to' : 'Bet'}</button>
+          <button id="allin">All-in</button>`;
+  el.innerHTML = h;
+  $('fold').onclick = () => send({ t: 'act', type: 'fold' });
+  $('call').onclick = () => send({ t: 'act', type: 'call' });
+  if ($('rs')) {
+    $('rs').oninput = () => $('rn').value = $('rs').value;
+    $('rn').oninput = () => $('rs').value = $('rn').value;
+    $('raise').onclick = () => send({ t: 'act', type: 'raise', amount: +$('rn').value });
+    $('allin').onclick = () => send({ t: 'act', type: 'raise', amount: max });
+  }
+}
+const esc = t => String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+</script>
+</body>
+</html>
