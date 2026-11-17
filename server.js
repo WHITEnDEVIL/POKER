@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/file.html');
+  res.sendFile(__dirname + '/index.html');
 });
 
 const SMALL_BLIND = 10;
